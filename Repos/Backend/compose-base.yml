@@ -1,0 +1,15 @@
+version: '3.7'
+
+services:
+  wgucapstonebackend:
+    build: .
+    container_name: "wgucapstonebackend"
+    volumes:
+      - ./app:/app
+    ports:
+    - 8000:8000
+    env_file:
+      - path: .env
+    deploy:
+      update_config:
+        order: start-first

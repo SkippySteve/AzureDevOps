@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    // ...
+    "baseUrl": ".",
+    "strictNullChecks": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "jsx": "react-jsx"
+  }
+}

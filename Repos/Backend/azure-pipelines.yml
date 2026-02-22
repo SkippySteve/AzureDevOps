@@ -1,0 +1,30 @@
+trigger:
+- main
+
+variables:
+  acrName: 'acrxs344ph3injno'
+  azureServiceConnection: 'pipeline-deploy-to-prod'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+- task: AzureCLI@2
+  displayName: Login to ACR
+  inputs:
+    azureSubscription: $(azureServiceConnection)
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      az acr login --name $(acrName)
+
+- script: |
+    IMAGE_TAG=$(Build.BuildId)
+    echo "##vso[task.setvariable variable=imageTag]$IMAGE_TAG"
+    echo $IMAGE_TAG > backend-image-tag.txt
+    docker build -t $(acrName).azurecr.io/capstone-backend:$IMAGE_TAG .
+    docker push $(acrName).azurecr.io/capstone-backend:$IMAGE_TAG
+  displayName: Build & Push Backend
+
+- publish: backend-image-tag.txt
+  artifact: backend-image-tag

@@ -1,0 +1,10 @@
+{
+  "tailwindCSS.classAttributes": ["class", "className", "ngClass"],
+  "tailwindCSS.experimental.classRegex": [],
+  "editor.showFoldingControls": "always",
+  "editor.foldingStrategy": "indentation",
+  "html.format.wrapAttributes": "preserve",
+  "css.format.spaceAroundSelectorSeparator": true,
+  "editor.folding": true,
+  "editor.foldingMaximumRegions": 10000
+}

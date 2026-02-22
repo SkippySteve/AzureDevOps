@@ -1,0 +1,136 @@
+trigger: none   # Prevents infra pipeline from running on code pushes
+
+# This makes the infra pipeline run AFTER backend & frontend pipelines complete
+resources:
+  pipelines:
+  - pipeline: backend
+    source: WGUCapstoneBackend
+    project: PipelineLab
+    branch: main
+    trigger: true
+  - pipeline: frontend
+    source: WGUCapstoneFrontend
+    project: PipelineLab
+    branch: main
+    trigger: true
+
+variables:
+  azureServiceConnection: 'pipeline-deploy-to-prod'
+  resourceGroupName: 'rg-prod'
+  location: 'eastus'
+
+stages:
+- stage: DeployInfra
+  displayName: Deploy Infrastructure
+  jobs:
+  - job: Deploy
+    displayName: Deploy Bicep Template
+    pool:
+      vmImage: 'ubuntu-latest'
+
+    steps:
+
+    # DOWNLOAD IMAGE TAG ARTIFACTS
+    - download: backend
+      artifact: backend-image-tag
+
+    - download: frontend
+      artifact: frontend-image-tag
+
+    # READ TAG VALUES INTO VARIABLES
+    - script: |
+        echo "Reading backend image tag..."
+        BACKEND_TAG=$(cat $(Pipeline.Workspace)/backend/backend-image-tag/backend-image-tag.txt)
+        echo "##vso[task.setvariable variable=backendImageTag]$BACKEND_TAG"
+
+        echo "Reading frontend image tag..."
+        FRONTEND_TAG=$(cat $(Pipeline.Workspace)/frontend/frontend-image-tag/frontend-image-tag.txt)
+        echo "##vso[task.setvariable variable=frontendImageTag]$FRONTEND_TAG"
+      displayName: "Load image tags"
+
+    # DEPLOY BICEP TEMPLATE
+    - task: AzureResourceManagerTemplateDeployment@3
+      displayName: "Deploy Bicep"
+      inputs:
+        deploymentScope: 'Resource Group'
+        azureResourceManagerConnection: '$(azureServiceConnection)'
+        action: 'Create Or Update Resource Group'
+        resourceGroupName: '$(resourceGroupName)'
+        location: '$(location)'
+        templateLocation: 'Linked artifact'
+        csmFile: 'infra/main.bicep'
+        overrideParameters: '-backendImageTag "$(backendImageTag)" -frontendImageTag "$(frontendImageTag)"'
+        deploymentMode: 'Incremental'
+        deploymentName: prod
+
+
+- stage: PatchApps
+  displayName: Patch Container Apps with Real URLs
+  dependsOn: DeployInfra
+  jobs:
+  - job: Patch
+    pool:
+      vmImage: ubuntu-latest
+
+    steps:
+    - task: AzureCLI@2
+      name: FetchFqdns
+      displayName: Patch Backend & Frontend
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          echo "Fetching FQDNs..."
+
+          BACKEND_FQDN=$(az deployment group show \
+            --resource-group $(resourceGroupName) \
+            --name prod \
+            --query "properties.outputs.backendHostName.value" -o tsv)
+
+          FRONTEND_FQDN=$(az deployment group show \
+            --resource-group $(resourceGroupName) \
+            --name prod \
+            --query "properties.outputs.frontendHostName.value" -o tsv)
+
+          echo "Backend FQDN: $BACKEND_FQDN"
+          echo "Frontend FQDN: $FRONTEND_FQDN"
+
+          echo "##vso[task.setvariable variable=backendFqdn;isOutput=true]$BACKEND_FQDN" 
+          echo "##vso[task.setvariable variable=frontendFqdn;isOutput=true]$FRONTEND_FQDN" 
+
+          echo "Updating backend CORS..."
+          az containerapp update \
+            --name app-backend \
+            --resource-group $(resourceGroupName) \
+            --set-env-vars FRONTEND_URL="https://$FRONTEND_FQDN"
+
+          echo "Updating frontend API URL..."
+          az containerapp update \
+            --name app-frontend \
+            --resource-group $(resourceGroupName) \
+            --set-env-vars VITE_API_BASE_URL="https://$BACKEND_FQDN"
+
+          echo "Done."
+
+    - task: AzureCLI@2
+      displayName: "Verify Backend API URL"
+      inputs:
+        azureSubscription: $(azureServiceConnection)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          BACKEND_FQDN="$(FetchFqdns.backendFqdn)"
+
+          echo "Verifying backend API URL..." 
+          echo "Calling: https://$BACKEND_FQDN" 
+          
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "https://$BACKEND_FQDN")
+          echo "Backend returned HTTP status: $RESPONSE"
+
+          if [ "$RESPONSE" -eq 200 ]; then
+            echo "Backend API is reachable and returned success."
+          else
+            echo "ERROR: Backend API did not return success."
+            exit 1
+          fi
